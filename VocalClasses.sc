@@ -13,40 +13,20 @@ FilterBank {
 
 
 
-PLL {
-	*ar {arg inputSignal, bus, lpf=10000, inLPF=5000, errFac=0.1, errLeak=0.5, filter=10000, reso=1;
-		//		var ph = LocalIn.ar(1);
-		var ph = InFeedback.ar(bus);
-	
-		var input = BLowPass4.ar(inputSignal.sign, inLPF.lag(0.2));
-		var phase = BLowPass4.ar(Integrator.ar(ph,1).mod(2*pi), lpf.lag(0.2));
-		//	var freq = ((SampleRate.ir * (phase - Delay1.ar(phase))) / (2*pi)).poll;
-		var signal = RLPF.ar(phase.sin.sign, filter, reso);
-		var comp = (((input >= 0) * (signal >= 0)) + ((input < 0) * (signal < 0)));
-		var withSign = comp * (signal > 0).if( K2A.ar(1), K2A.ar(-1));
-		
-		var err =  Integrator.ar(1-withSign, errLeak.lag(0.5));
-	
-		//		LocalOut.ar(0.0001+(err*errFac));
-		Out.ar(bus, 0.0001+(err*errFac));
-		^signal
-	}
-}
-
 
 FollowEnv {
-	*kr { arg input, followMode = 0, lagTime = 8;
+	*kr { arg input, followMode = 0, lagTime = 8, followThresh=0.002;
 		var env = input.abs.lag(0.1);
 		var longTerm = env.lag(lagTime);
 		var mini = RunningMin.kr(longTerm).lag(1) + 0.0001;
 		var maxi = RunningMax.kr(longTerm, Impulse.kr(1/lagTime)).lag(lagTime);
 		var range = (maxi - mini);
-		var playing = (maxi > 0.002).lag2ud(0.5, 2);
+		var playing = (maxi > followThresh).lag2ud(0.5, 2);
 		var normalEnv = ((env - mini) / range).clip(0,1) * playing;
 		var invEnv = 1 - normalEnv;
 		var initialEnv = EnvGen.kr(Env([0,0,1], [lagTime, 0.1]), 1);
 		var followEnv = SelectX.kr(followMode.lag(0.5), [normalEnv, 1, invEnv]).lag2(lagTime);
-		^([normalEnv, followEnv] * initialEnv)
+		^([normalEnv, followEnv] * initialEnv).lag2ud(0.0, 3)
 	}
 
 }
@@ -54,7 +34,7 @@ FollowEnv {
 
 VoiceAnalysis {
 	var <>playingBus, <>envBus, analysisData, <>analysisSynth,
-	analysisReceiver, name, inputBus, predictionResponder,
+	analysisReceiver, <name, inputBus, predictionResponder,
 	parameterDistance, collectedParameters;
 
 	*new { | name, input |
@@ -88,6 +68,8 @@ VoiceAnalysis {
 		Server.default.options.numOutputBusChannels = 6;
 		Server.default.waitForBoot({
 			var commandName = ("/analysis" ++ name).asSymbol;
+			var playingCmd = ("/playing" ++ name).asSymbol;
+			var ampCmd = ("/amp" ++ name).asSymbol;
 
 			playingBus = Bus.control(Server.default, 1);
 			envBus = Bus.control(Server.default, 1);
@@ -95,11 +77,12 @@ VoiceAnalysis {
 			analysisReceiver = OSCFunc({ arg msg; analysisData = msg[3..]; }, commandName);
 
 			// todo delay
-			analysisSynth = { | followMode = 0, hpf = 20, lpf = 500, focus = 1 |
-				var inp = SelectXFocus.ar(inputBus, SoundIn.ar([0,1,2,3,4,5]), focus, true);
-				var inpAmp = inp.abs.lag(0.1);
-				var follow = FollowEnv.kr(inp, followMode);
-				var playing = follow[0].lag(2) > 0.3;
+			analysisSynth = { | followMode = 0, hpf = 20, lpf = 500, focus = 1, playingThresh=0.3, followThresh=0.01 |
+				var inpRaw = SelectXFocus.ar(inputBus, SoundIn.ar([0,1,2,3,4,5]), focus, true);
+				var inp = Compander.ar(inpRaw*1.5, inpRaw*1.5, 0.2, 1, 0.5) * 1.5;
+				var inpAmp = inp.abs.lag(0.25);
+				var follow = FollowEnv.kr(inp, followMode, 8, followThresh);
+				var playing = follow[0].lag(2) > playingThresh;
 
 				var in = BHiPass.ar(BLowPass.ar(inp, lpf), hpf);
 				var analysisInput = Compander.ar(in*2, in*2, 0.2, 1, 0.4) * 1.5;
@@ -109,11 +92,16 @@ VoiceAnalysis {
 				var statsDerivative = FluidStats.kr(derivative, ControlRate.ir*0.5);
 				var data = statsMFCCS[0] ++ statsMFCCS[1] ++ statsDerivative[0] ++ statsDerivative[1];
 				var trig = Impulse.kr(10*playing);
-
+				var trigGui = Impulse.kr(5);
+				
 				Out.kr(playingBus,  playing);
 				Out.kr(envBus,  follow[1]);
-
 				SendReply.kr(trig: trig, cmdName: commandName, values: data);
+				
+				SendReply.kr(trig: trigGui, cmdName: ampCmd, values: inpAmp);
+				SendReply.kr(trig: trigGui, cmdName: playingCmd, values: playing);
+				
+
 			}.play;
 		})
 	}
@@ -229,7 +217,7 @@ VoiceSynth {
 				 // SendReply.kr(trig: Impulse.kr(1), cmdName: '/filters', values: filAmps, replyID: id);
 				 del1 = fil.sum;
 
-				 env = SelectX.kr(envType.lag2(4), [EnvGen.kr(Env.asr(envLag*0.66,1,envLag,[3,-3]), DelayN.kr(on, 0.1, 0.1)), In.kr(envBus)]);
+				 env = SelectX.kr(envType.lag2(4), [EnvGen.kr(Env.asr(envLag*0.66,1,envLag,[3,-3]), DelayN.kr(on, 0.1, 0.1)), In.kr(envBus).lag2ud(0.0,6)]);
 
 				 LocalOut.ar(([del1, del2, del3] * (-1) * ((env*0.2)+0.8)));// ++ K2A.ar(filTrig));
 				 output = fb.sum*amp*env;
@@ -345,7 +333,7 @@ VoiceSynth {
 
 
 VocalMain {
-	var <>analyses, <>synths;
+	var <>analyses, <>synths, win, amps, playing, knobs, labels, ampFuncs, playingFuncs;
 	
 	*new { | nn |
         ^super.new.init(nn);
@@ -363,10 +351,45 @@ VocalMain {
 
 	}
 
+	createGUI { arg names;
+		var playingCmds = names.collect({arg n;  ("/playing" ++ n).asSymbol});
+		var ampCmds = names.collect({arg n;  ("/amp" ++ n).asSymbol});
+
+		amps = Array.fill(6, { LevelIndicator().style_(\continuous).value_(0) }); 
+		playing = Array.fill(6, { Button()
+			.states_([["", Color.white, Color.white], ["Playing", Color.white, Color.red]])
+			.value_(0) });
+		//		knobs = Array.fill(6, {Knob().value_(0.5)});
+		labels = Array.fill(6, {arg i; StaticText().string_(names[i]).align_(\center).maxHeight_(50)});
+		win = Window("Manifold", 1000@800).front.layout_(VLayout(HLayout(*labels),HLayout(*amps),HLayout(*playing)));	
+
+		names.do({arg n, i; labels[i].string_(n)});
+		
+		
+		ampFuncs = ampCmds.collect({arg cmd, i;
+			OSCFunc({ arg msg;
+				var val = msg[3];
+				{ amps[i].value_(val) }.defer;
+			}, cmd);
+		});
+		
+		playingFuncs = playingCmds.collect({arg cmd, i;
+			OSCFunc({ arg msg;
+				var val = msg[3];
+				{ playing[i].value_(val) }.defer;
+			}, cmd);
+		});
+		
+	}
+
+	
 	start {
 		Task({
 			analyses.do(_.start);
 			4.wait;
+			{ this.createGUI(analyses.collect(_.name)) }.fork(AppClock);
+
+
 			synths.do(_.start);
 			4.wait;
 			synths.do({|sy, i|

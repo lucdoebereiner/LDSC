@@ -1,9 +1,9 @@
 TwisterControl {
 	var speed = 0, ctrlVal = 0.5, lastN, <mappedVal = 0.5,
 	buttonDown = false, midiFunc, midiButton, routine, buttonDownSend = false,
-	spec, <>baseInc = 0.02, <>minSpeed = 0.4, <>maxSpeed = 5, controlNumber, mOut;
-	
-   
+	spec, <>baseInc = 0.02, <>minSpeed = 0.2, <>maxSpeed = 5, controlNumber, mOut;
+
+
     *new { | controlN, chan = 0, midiOut, spec, callback, buttonReleaseCallback, buttonDownCallback, bdSend = false, initVal = 0.5 |
         ^super.new.init(controlN, chan, midiOut, spec, callback, buttonReleaseCallback, buttonDownCallback, bdSend, initVal)
     }
@@ -15,7 +15,7 @@ TwisterControl {
 		spec = specIn;
 		controlNumber = controlN;
 		buttonDownSend = bdSend;
-		
+
 		midiFunc = MIDIFunc.cc({arg ...args;
 			var inc = baseInc * speed.abs.linexp(0,3.5,minSpeed,maxSpeed);
 			if (args[0] == 65) {
@@ -24,7 +24,7 @@ TwisterControl {
 				ctrlVal = (ctrlVal - inc).fold(0,1);
 			};
 			mappedVal = spec.map(ctrlVal);
-			callback.value(mappedVal);					
+			callback.value(mappedVal);
 		}, controlN, chan);
 
 		midiButton = MIDIFunc.cc({arg ...args;
@@ -47,12 +47,12 @@ TwisterControl {
 				lastN = lastN.drop(1).add(ctrlVal);
 				// if (buttonDown.not || buttonDownSend) {
 				// 	mappedVal = spec.map(ctrlVal);
-				// 	callback.value(mappedVal);					
+				// 	callback.value(mappedVal);
 				// };
 				0.1.wait;
 				midiOut.control(0, controlN, spec.unmap(mappedVal).linlin(0,1,0,127).round);
 			})
-		}).play;	
+		}).play;
     }
 
 	set { | val |
@@ -60,7 +60,7 @@ TwisterControl {
 		ctrlVal = spec.unmap(val);
 		mOut.control(0, controlNumber, ctrlVal.linlin(0,1,0,127).round);
 	}
-	
+
 	stop {
 		routine.stop
 	}
@@ -88,7 +88,7 @@ TwisterDef {
 	*setVal { | name, val |
 		defDict[name].set(val);
 	}
-	
+
 	*parameterState {
 		var parameters = [];
 		defDict.keysValuesDo { |key, value|
