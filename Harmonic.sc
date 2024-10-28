@@ -204,6 +204,11 @@ HarmonicDomain {
 		};
 		this.prReIndexDomain;
 	}
+
+	closestHarmToFreq {|freq|
+		var diffs = domain.collect{|h| (h.cps - freq).abs};
+		^domain[diffs.minIndex]
+	}
 }
 
 Voice {
